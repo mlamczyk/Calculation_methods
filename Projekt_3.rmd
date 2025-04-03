@@ -1,0 +1,614 @@
+---
+title:
+  "Program statystyczny w analizie danych"
+subtitle:
+  "Projekt zaliczeniowy 3"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+
+```{r include=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(klaR)
+library(e1071)
+library(readxl)
+library(MASS)
+library(nnet)
+library(caret)
+library(tidymodels)
+```
+
+
+# Zadanie 1
+
+**Polecenie**: Dla danych ze zbioru `dane1_3` przeprowadź analizę dyskryminacyjną korzystając z metody opartej o naiwny klasyfikator Bayesa (przyjmij gaussowski charakter postulowanych funkcji gęstości jednowymiarowych) i kryterium perceptronowe. Porównaj procent poprawnych predykcji (dla reklasyfikacji próby uczącej). Przedstaw graficzną reprezentację rezultatów dyskryminacji/klasyfikacji. W przypadku naiwnego klasyfikatora Bayesa wykonaj dodatkowo kroswalidację n-krotną (ang. leave-one out) i 10-krotną.
+
+Wczytanie danych:
+```{r}
+dane1 <- read_excel("C:/Users/magda/OneDrive/Pulpit/Projekt-metody_obliczeniowe/dane1_3.xlsx")
+```
+
+Podsumowanie zbioru danych:
+```{r}
+summary(dane1)
+table(dane1$klasa)
+```
+Zatem `dane1` to próba ucząca $\mathcal{L}_n = \{(X_1,Y_1),\cdots,(X_n,Y_n)\}$, gdzie:
+
+- $X_i \in \mathbb{R}^2$ to wektor cech (zmienne objaśniające),
+- $Y \in \{A,B\}$ to etykieta klasy (zmienna objaśniana).
+
+Do klasy `A` należy 86 obserwacji, a do klasy `B` 105 obserwacji.
+
+Interesuje nas predykcja etykiety $Y$ na podstawie atrybutów $X$. Ten proces nazywamy klasyfikacją/dyskryminacją, uczeniem pod nadzorem, rozpoznawaniem wzorców.
+
+Zamieniamy kolumnę `klasa` na factor:
+```{r}
+dane1 <- dane1 %>%
+  mutate(klasa = factor(klasa))
+```
+
+Wykres danych w próbie uczącej:
+```{r}
+ggplot(dane1,aes(x=x1,y=x2))+
+  geom_point(aes(color=klasa,shape=klasa))+
+  labs(color="Klasa",shape="Klasa")+
+  ggtitle("Dane w próbie uczącej")+
+  xlab("x1")+ylab("x2")
+```
+
+## Naiwny klasyfikator Bayesa
+
+Klasyfikacja/dyskryminacja to predykcja etykiety $Y$ na podstawie atrybutów $X$. W przypadku klasyfikacji dwuklasowej zakładamy, że każda obserwacja należy do jednej z dwóch klas `A` lub `B`. Model klasyfikacyjny wykorzystuje dane uczące do określenia granicy decyzyjnej, czyli reguły pozwalającej na przypisanie klasy do nowych danych.
+
+Klasyfikator (reguła klasyfikująca) to funkcja $d:\mathbb{R}^p \to \{0,1\}$. Wtedy $d(X)$ jest prognozą etykiety $Y$ obserwacji $X$.
+
+Rzeczywisty poziom błędu klasyfikatora $d$ to $e(d)=P(d(X) \neq Y)$.
+
+Naiwny klasyfikator Bayesa to metoda klasyfikacji oparta na twierdzeniu Bayesa, które wyraża zależność między prawdopodobieństwami warunkowymi i brzegowymi:
+
+$$P(Y=y \mid X=x)=\frac{P(X=x \mid Y=y)P(Y=y)}{P(X=x)}.$$
+Naiwnym klasyfikatorem Bayesa jest wyrażenie:
+
+$$d_B(x)=\arg\max_{k}P(Y=k) f(x \mid Y=k)=\arg\max_{k} \Pi_k f_k(x),$$
+
+gdzie gęstość $f(x \mid Y = k)$ jest wyliczana jako iloczyn gęstości jednowymiarowych cech $f(x \mid Y = k) = \prod_{j=1}^p f_{k_j}(x_j).$
+
+Zakładamy, że cechy $(x_1,x_2)$ są niezależne warunkowo względem klasy $Y$. Naiwność klasyfikatora bayesowskiego wynika właśnie z założenia niezależności cech, które w praktyce często nie jest spełnione.
+
+**Algorytm konstrukcji naiwnego klasyfikatora bayesowskiego**
+
+1. Dla każdej grupy $k \in \{0,1\}$ kostruujemy estymator $\hat{f}_{k_j}$ gęstości zmiennej losowej $X_j$, wykorzystując do tego elementy próby uczącej, dla których $Y_i=k$.
+
+2. $\hat{f_k}(x)=\prod_{j=1}^p \hat{f}_{k_j}(x_j).$
+
+3. $\hat{\Pi}_k=\frac{1}{n} \sum_{i=1}^n I(Y_i=k)$,
+$$
+I(Y_i = k) =
+\begin{cases} 
+1, & Y_i = k, \\
+0, & Y_i \neq k.
+\end{cases}
+$$
+
+4. $\hat{d}_{NB}(x)=\arg\max_{k} \hat{\Pi}_k \hat{f}_k(x)$.
+
+Możemy przeprowadzić analizę dyskryminacyjną korzystając z metody opartej o naiwny klasyfikator Bayesa.  Parametr `usekernel=FALSE` oznacza, że algorytm zakłada rozkłady Gaussa, czyli jednowymiarowe funkcje gęstości są modelowane jako rozkłady normalne. Jeśli nie podamy argumentu `prior`, to funkcja `NaiveBayes` automatycznie oszacuje prawdopodobieństwa a priori ($\Pi_k=P(Y=k)$) na podstawie liczebności klas w danych uczących.
+```{r}
+NB <- NaiveBayes(data=dane1, klasa~x1+x2, usekernel=F)
+pred_NB <- predict(NB)
+```
+
+Macierz pomyłek:
+```{r}
+T_NB <- table(dane1$klasa,pred_NB$class)
+T_NB
+```
+
+Skuteczność klasyfikacji (accuracy) mierzy odsetek poprawnie sklasyfikowanych obserwacji w próbie uczącej. Wartość ta określa, jak dobrze model radzi sobie z przewidywaniem klasy etykiet na podstawie dostępnych cech. Wysoka skuteczność wskazuje na dobrą reklasyfikację, ale może nie zawsze odzwierciedlać rzeczywistą jakość modelu, zwłaszcza gdy dane są niezbalansowane (tj. liczebność klas jest bardzo różna).
+
+Precyzja/dokładność naiwnego klasyfikatora Bayesa:
+```{r}
+acc_NB <- sum(diag(T_NB)/sum(T_NB))
+acc_NB
+```
+
+Błąd klasyfikacji (classification error) jest dopełnieniem skuteczności, czyli odsetkiem błędnie sklasyfikowanych obserwacji. Wskazuje on, jak często model nieprawidłowo przypisuje klasę, co może wynikać z niedopasowania modelu, założeń metody, lub niskiej jakości danych.
+
+Błąd klasyfikacj naiwnego klasyfikatora Bayesa:
+```{r}
+err_NB <- 1-acc_NB
+err_NB
+```
+
+Wykres klasyfikacji naiwnego klasyfikatora bayesowskiego:
+```{r}
+dane1$pred_NB=pred_NB$class
+
+ggplot(dane1,aes(x=x1,y=x2))+
+  geom_point(aes(color=pred_NB, shape=klasa),size=1.5)+
+  labs(color="Predykcja",shape="Klasa")+
+  ggtitle("Naiwny klasyfikator Bayesa")+
+  xlab("x1")+ylab("x2")+
+  theme(plot.title=element_text(hjust=0.5))
+```
+Naiwny klasyfikator Bayesa ma wysoką skuteczność reklasyfikacji dla zbioru `dane1`.
+
+
+## Kryterium perceptronu
+
+Perceptron jest jednym z najprostszych modeli uczenia maszynowego stosowanym w zadaniach klasyfikacji liniowej. Perceptron operuje w przestrzeni wielowymiarowej i rozdziela dane za pomocą hiperpłaszczyzny. Jego celem jest znalezienie odpowiednich wag, które pozwalają jak najlepiej rozdzielić dwie klasy w danych uczących.
+
+**Założenia**
+
+  1. Klasy są liniowo separowalne.
+  2. Klasy oznaczamy jako $+1$ i $-1$. Binarna klasyfikacja upraszcza formuły matematyczne i algorytm uczenia.
+
+**Model perceptronu**
+
+  Dla każdego punktu wejściowego $x=[x_1, x_2, \dots, x_p]$, perceptron oblicza wartość funkcji liniowej:
+$$z = w_0 + \sum_{j=1}^p w_j x_j,$$
+gdzie:
+
+- $w_0$ to waga odpowiadająca biasowi,
+- $w_j$ to wagi przypisane poszczególnym cechom $x_j$,
+- $z$ to wartość funkcji decyzyjnej.
+
+Następnie perceptron stosuje funkcję progową (tzw. jednostkę Heaviside’a):
+$$
+y = 
+\begin{cases} 
++1, & z \geq 0, \\
+-1, & z < 0.
+\end{cases}
+$$
+
+**Algorytm uczenia perceptronu**
+
+Celem algorytmu jest minimalizacja liczby błędnie sklasyfikowanych przykładów. Wagi $w=[w_0, w_1, \dots, w_p]$ są modyfikowane w taki sposób, aby poprawić klasyfikację błędnie oznaczonych obserwacji. Aktualizacja wag jest oparta na błędzie klasyfikacji danego punktu (czyli różnicy między oczekiwaną klasą a przewidywaną).
+
+Algorytm uczy się iteracyjnie na podstawie danych uczących. Proces ten można podzielić na następujące kroki:
+
+1. Inicjalizacja:
+   - Przypisanie początkowych wartości wag $w_0, w_1, \dots, w_p$. Mogą być one losowe lub ustalone na 0.
+   - Ustawienie parametrów: liczby epok $E$ (maksymalnej liczby iteracji), kroku uczenia $\eta$ (czyli     tempa, z jakim zmieniają się wagi), oraz poziomu precyzji $R$ (czyli minimalnej dokładności wymaganej do zatrzymania algorytmu).
+
+2. Uczenie:
+   - Dla każdej epoki:
+     1. Przeprowadź iterację przez przykłady w zbiorze uczącym.
+     2. Oblicz wartość funkcji decyzyjnej $z$ dla każdego przykładu $x$.
+     3. Jeśli wynik $z$ jest niezgodny z rzeczywistą klasą $y$, zaktualizuj wagi:
+     $$w_j \leftarrow w_j + \eta \cdot (y - z) \cdot x_j, \quad \text{dla } j = 0, 1, \dots, p.$$
+     4. Sprawdź dokładność klasyfikacji i zatrzymaj algorytm, jeśli osiągnięto wymagany poziom $R$. Perceptron konwerguje (tj. znajduje rozwiązanie) tylko w przypadku danych liniowo separowalnych.
+
+3. Przewidywanie:
+   - Dla nowych danych zastosuj wyuczone wagi $w$, aby obliczyć $z$, a następnie zaklasyfikować obserwacje do jednej z dwóch klas.
+
+Możemy zainicjować kryterium perceptronowe. Najpierw zamieniamy oznaczenia klas na 1 i -1:
+```{r}
+dane1 <- dane1 %>%
+  mutate(klasa = as.numeric(klasa),
+         klasa = ifelse(klasa == 1, 1, -1))
+```
+
+Definiujemy początkowe wagi (mogą być losowe):
+```{r}
+w0 <- round(runif(1,min=0,max=1),2)
+w1 <- round(runif(1,min=0,max=1),2)
+w2 <- round(runif(1,min=0,max=1),2)
+```
+
+Niech `E` oznacza liczbę epok, `d` krok uczenia się i `R` zadowalający poziom precyzji/dokładności:
+```{r}
+E <- 100
+d <- 0.001
+R <- 0.95
+```
+
+Pętla ucząca perceptronu dla 2-wymiarowego wektora danych wejściowych:
+```{r}
+for (i in 1:E){
+  print(paste("Epoka:", i))
+  indeks <- sample(1:length(dane1$x1))
+  for (j in indeks){
+    z <- (w0+w1*dane1$x1[j]+w2*dane1$x2[j])
+    if (z>=0){
+      z <- 1
+    }
+    else{
+      z <- -1
+    }
+    w0 <- w0+d*(dane1$klasa[j]-z)*1.0
+    w1 <- w1+d*(dane1$klasa[j]-z)*dane1$x1[j]
+    w2 <- w2+d*(dane1$klasa[j]-z)*dane1$x2[j]
+  }
+  grup_pre <- w0+w1*dane1$x1+w2*dane1$x2
+  pomoc <- grup_pre
+  grup_pre[pomoc>=0]<- 1
+  grup_pre[pomoc<0] <- -1
+  
+  acc <- length(dane1$klasa[grup_pre==dane1$klasa])/length(dane1$klasa)
+  print(paste("Precyzja/dokładność:",acc))
+  if (acc>=R){
+    break
+  }
+}
+```
+Stosujemy iterację po `indeks`, ponieważ losowa kolejność próbek pomaga unikać problemów z cyklicznością przy powtarzaniu tych samych obserwacji w tej samej kolejności.
+
+Funkcja predykcji na podstawie otrzymanego kryterium perceptronowego:
+```{r}
+predykcja <- function(x){
+  if (w0+w1*x[1]+w2*x[2]>=0){
+    return(1)
+  }
+  else{return(-1)}
+}
+```
+
+Uzupełniamy ramki danych o predykcję na podstawie powyższej funkcji i obliczamy precyzję/dokładność oraz bład klasyfikatora:
+```{r}
+
+dane1$pred <- apply(dane1[,1:2],1,predykcja)
+
+acc <- length(dane1$pred[dane1$pred==dane1$klasa])/length(dane1$pred)
+err <- 1-acc
+```
+
+Możemy porównać wyniki naiwnego klasyfikatora Bayesa i kryterium perceptronowego. Oba modele wykorzystują różne założenia:
+- naiwny Bayes zakłada niezależność cech i modeluje rozkłady a priori,
+- perceptron stosuje podejście deterministyczne, iteracyjnie modyfikując wagi w celu znalezienia optymalnej hiperpłaszczyzny separującej.
+
+Błąd naiwnego klasyfikatora Bayesa:
+```{r}
+err_NB
+```
+
+Błąd kryterium perceptronu:
+```{r}
+err
+```
+
+Wykres klasyfikacji kryterium perceptronu:
+```{r}
+dane1 <- dane1 %>%
+  mutate(klasa = factor(klasa, 
+                        levels = c(1, -1), 
+                        labels = c("A", "B")),
+         pred = factor(pred,
+                       levels = c(1, -1),
+                       labels = c("A", "B")))
+
+
+ggplot(dane1,aes(x=x1,y=x2))+
+  geom_point(aes(color=pred, shape=klasa),size=1.5)+
+  labs(color="Predykcja",shape="Klasa")+
+  ggtitle("Kryterium perceptronu")+
+  xlab("x1")+ylab("x2")+
+  theme(plot.title=element_text(hjust=0.5))
+```
+Dla kryterium perceptronu również otrzymaliśmy zadowalającą skuteczność reklasyfikacji.
+
+## Kroswalidacja n-krotna (ang. leave-one out) i 10-krotna dla klasyfikatora Bayesa
+
+Niech $\hat{d}(x)=\hat{d}(x,\mathcal{L}_n)$ to klasyfikator skonstruowany przy pomocy próby uczącej $\mathcal{L}_n$. Miarą klasyfikacji jest aktualny poziom błędu klasyfikatora
+$$e(\hat{d})=P(\hat{d}(x) \neq Y \mid \mathcal{L}_n).$$
+Niech $\hat{e} \equiv \hat{e}(\hat{d})$ będize estymatorem aktualnego poziomu błędu klasyfikatora $\hat{d}$. Ocenę tą nazywamy błędem klasyfkacji.
+
+W sytuacji, gdy nie dysponujemy niezależną próbą testową, używamy próby uczącej $\mathcal{L}_n$ zarówno do konstrukcji klasyfikatora, jak i do oceny aktualnego poziomu błędu.
+
+**Metoda n-krotnej kroswalidacji (CV - cross validation)**
+
+Będziemy próbowali zredukować obciążenie estymatora metody resubstytucji
+$$\hat{e}_R=\frac{1}{n}\sum_{j=1}^n I(\hat{d}(X_j,\mathcal{L}_n) \neq Y_j)$$
+przy zastosowaniu próby uczącej jako jednocześnie próby uczącej i testowej, ale w trochę inny sposób niż w metodzie ponownego podstawiania (resubstytucji). Zastosujemy metodę podziału próby na dwa podzbiory: próbę uczącą (do konstrukcji klasyfikatora $\hat{d}$) oraz próbę testową (do kostrukcji estymatora $e_R$).
+
+Tutaj jednak wykorzystujemy tylko część informacji do nauki, a to prowadzi często do zawyżenia wartości estymatora błędu. Rozwiązaniem jest CV:
+
+1. Oznaczamy przez $\mathcal{L}_n^{(-j)}$ próbę uczącą powstałą z $\mathcal{L}_n$ poprzez usunięcie z $\mathcal{L}_n$ jednej obseerwacji $Z_j=(X_j,Y_j)$
+  - $\mathcal{L}_n^{(-j)}$ to (n-1) elementowa próba ucząca,
+  - $Z_j$ to 1-elementowy zbiór testowy.
+
+2. Powtarzamy $n$ razy dla każdego $Z_j$ osobno, Wtedy estymator błędu ma postać
+  $$\hat{e}_{CV}=\frac{1}{n} \sum_{j=1}^n I(\hat{d}(X_j,\mathcal{L}_n^{(-j)}) \neq Y_j).$$
+
+Możemy przeprowadzić n-krotne sprawdzenie krzyżowe dla naiwnego klasyfikatora Bayesa:
+```{r}
+X <- dane1$klasa
+
+for (i in 1:191){
+  daneU <- dane1[-c(i),]
+  daneT <- dane1[c(i),]
+  nb <- NaiveBayes(data=daneU, klasa~x1+x2, usekernel=F)
+  pre_nb <- predict(nb,daneT)
+  X[i] <- pre_nb$class[1]
+}
+
+dane1$nb_ncv <- X
+```
+
+Macierz pomyłek:
+```{r}
+T_nb_ncv <- table(dane1$klasa,dane1$nb_ncv)
+T_nb_ncv
+```
+
+Precyzja/dokładność n-krotnej klasyfikacji krzyżowej:
+```{r}
+acc_nb_ncv <- sum(diag(T_nb_ncv))/sum(T_nb_ncv)
+acc_nb_ncv
+```
+
+Błąd:
+```{r}
+err_nb_ncv <- 1-acc_nb_ncv
+err_nb_ncv
+```
+
+Wykres:
+```{r}
+ggplot(dane1,aes(x=x1,y=x2))+
+  geom_point(aes(color=nb_ncv, shape=klasa),size=1.5)+
+  labs(color="Predykcja",shape="Klasa")+
+  ggtitle("n-krotne sprawdzenie krzyżowe")+
+  xlab("x1")+ylab("x2")+
+  theme(plot.title=element_text(hjust=0.5))
+```
+
+**Metoda 10-krotnej kroswalidacji (**$\nu$**-fold cross validation)**
+
+Polega na losowym podziale próby $\mathcal{L}_n$ na $\nu$ (w naszym przypadku 10) równolicznych podzbiorów. Przy czym $\nu -1$ z nich tworzy próbę uczącą, jeden pozostały tworzy próbę testową.
+
+Niech $\tilde{\mathcal{L}}_n^{(1)},\tilde{\mathcal{L}}_n^{(2)},\cdots,\tilde{\mathcal{L}}_n^{(\nu)},$ to podział próby uczącej na $\nu$ podzbiorów, gdzie
+
+- $\tilde{\mathcal{L}}_n^{(-i)}=\mathcal{L}_n \setminus \tilde{\mathcal{L}}_n^{(i)}$, $i=1,2,\cdots,\nu$ to próba ucząca,
+- $\tilde{\mathcal{L}}_n^{(i)}$, $i=1,2,\cdots,\nu$ to próba testowa.
+
+Konstruujemy $\nu$ klasyfikatorów $\hat{d}(X,\tilde{\mathcal{L}}_n^{(-i)})$ dla $i=1,2,\cdots,\nu$
+$$\hat{e}_{\nu CV}=\frac{1}{n} \sum_{i=1}^{\nu} \sum_{j=1}^n I(Z_j \in \tilde{\mathcal{L}}_n^{(i)}) \cdot I(\hat{d}(X_j,\mathcal{L}_n^{(-i)}) \neq Y_j).$$
+
+Możemy przeprowadzić 10-krotną kroswalidację dla naiwnego klasyfikatora Bayesa. Dzielimy zbiór uczący na 10 podzbiorów (nie muszą być równoliczne):
+```{r}
+folds <- createFolds(dane1$klasa, k = 10, list = TRUE)
+```
+
+Przeprowadzamy proces uczenia iterując przez każdy podzbiór:
+```{r}
+Y <- dane1$klasa
+
+for (i in seq_along(folds)) {
+  daneU <- dane1[-folds[[i]], ]
+  daneT <- dane1[folds[[i]], ]
+  nb <- NaiveBayes(data = daneU, klasa ~ x1 + x2, usekernel = F)
+  pre_nb <- predict(nb, daneT)
+  Y[folds[[i]]] <- pre_nb$class
+}
+
+dane1$nb_cv <- Y
+```
+
+Macierz pomyłek:
+```{r}
+T_nb_cv=table(dane1$klasa,dane1$nb_cv)
+T_nb_cv
+```
+
+Precyzja/dokładność 10-krotnej kroswalidacji:
+```{r}
+acc_nb_cv <- sum(diag(T_nb_cv))/sum(T_nb_cv)
+acc_nb_cv
+```
+
+Błąd:
+```{r}
+err_nb_cv <- 1-acc_nb_cv
+err_nb_cv
+```
+
+Wykres:
+```{r}
+ggplot(dane1,aes(x=x1,y=x2))+
+  geom_point(aes(color=nb_cv, shape=klasa),size=1.5)+
+  labs(color="Predykcja",shape="Klasa")+
+  ggtitle("10-krotna kroswalidacja")+
+  xlab("x1")+ylab("x2")+
+  theme(plot.title=element_text(hjust=0.5))
+```
+Wyniki 10-krotnej walidacji krzyżowej pokazują, że klasyfikator oparty na naiwnym Bayesie osiąga zadowalającą skuteczność. Metoda ta jest znacznie mniej kosztowna obliczeniowo w porównaniu z n-krotną kroswalidacją, ponieważ dzieli dane na 10 podzbiorów, co zmniejsza liczbę koniecznych iteracji.
+
+Pomimo, że wynik 10-krotnej walidacji może delikatnie różnić się od wyniku n-krotnej walidacji, różnica ta zwykle staje się mniejsza, gdy zwiększymy liczbę podzbiorów $\nu$.
+
+
+# Zadanie 2
+
+**Polecenie**: Korzystając z danych ze zbioru `dane2_3`, przeprowadź analizę dyskryminacyjną na bazie metody regresji logistycznej. Określ procent poprawnych predykcji dla próby uczącej. Dodatkowo, powtórz tę procedurę aplikując regresję logistyczną do zmiennych kanonicznych i przedstaw graficznie rezultaty przeprowadzonej analizy (wykorzystując jako współrzędne rzuty na kierunki kanoniczne).
+
+Wczytanie danych:
+```{r}
+dane2 <- read_excel("C:/Users/magda/OneDrive/Pulpit/Projekt-metody_obliczeniowe/dane2_3.xlsx")
+```
+
+Podsumowanie zbioru danych:
+```{r}
+summary(dane2)
+table(dane2$klasa)
+```
+Drugi zbiór danych `dane2` zawiera 4 zmienne objaśniające ($x_1,x_2,x_3,x_4$) oraz zmienną objaśnianą `klasa`. Mamy trzy klasy (`1`,`2`,`3`) po 70 obserwacji. 
+
+Zamieniamy kolumnę `klasa` na factor:
+```{r}
+dane2 <- dane2 %>%
+  mutate(klasa = factor(klasa))
+```
+
+Wykres danych w próbie uczącej:
+```{r}
+ggplot(dane2,aes(x=x1,y=x2))+
+  geom_point(aes(color=klasa,shape=klasa))+
+  labs(color="Klasa",shape="Klasa")+
+  ggtitle("Dane w próbie uczącej")+
+  xlab("x1")+ylab("x2")
+```
+
+## Regresja logistyczna dla K > 2 klas
+
+Regresja logistyczna jest jedną z podstawowych metod modelowania statystycznego, używaną w klasyfikacji binarnej i wieloklasowej. W przypadku, gdy liczba klas $K>2$, stosujemy tzw. wieloklasową regresję logistyczną (ang. multinomial logistic regression), która generalizuje klasyczną regresję logistyczną do problemów wieloklasowych.
+
+**Model wieloklasowej regresji logistycznej**
+
+Dla problemu klasyfikacji, gdzie zmienna objaśniana $Y$ może przyjmować $K$ różnych wartości ($Y \in \{1,2,\cdots,K\}$), celem jest oszacowanie prawdopodobieństwa przynależności obserwacji $i$ do każdej z klas:
+$$P(Y=k \mid X=x) \text{ dla } k=1,2,\cdots,K.$$
+Model wieloklasowej regresji logistycznej opisuje te prawdopodobieństwa jako funkcję wykładniczą w postaci:
+$$P(Y=k \mid X=x)=\frac{\exp{(\beta_{k0}+\beta_k^Tx)}}{\sum^K_{j=1}\exp{(\beta_{j0}+\beta_j^Tx)}},$$
+gdzie: 
+
+- $x=[x_1,x_2,\cdots,x_p]$ to wektor cech (zmiennych objaśniających),
+- $\beta_{k0}$ to wyraz wolny dla klasy $k$,
+- $\beta_k=[\beta_{k1},\beta_{k2},\cdots,\beta_{kp}]$ to wektor współczynników dla zmiennych objaśniających w klasie $k$.
+
+Jedna z klas (zwykle klasa bazowa) jest używana jako punkt odniesienia, a współczynniki dla pozostałych klas są wyznaczane względem niej.
+
+**Estymacja parametrów**
+
+Parametry modelu ($\beta_{k0},\beta_k$) są estymowane metodą największej wiarygodności (MLE, ang. Maximum Likelihood Estimation). Procedura iteracyjna (np. metoda Newtona-Raphsona) maksymalizuje funkcję wiarygodności, co pozwala znaleźć optymalne współczynniki.
+
+**Predykcja**
+
+Po wyznaczeniu parametrów modelu, możemy obliczyć prawdopodobieństwo przynależności danej obserwacji do każdej z klas 
+$k=1,2,\cdots,K$. Obserwację przypisujemy do klasy z najwyższym prawdopodobieństwem:
+$$\hat{y}=\arg \max_k P(Y=k \mid X=x).$$
+
+Możemy przeprowadzić analizę dyskryminacyjną na bazie metody regresji logistycznej. Ponieważ mamy trzy klasy, to mamy do czynienia z wieloklasową regresją logistyczną. Funkcja `multinom` jest przeznaczona do regresji logistycznej dla wielu klas.
+```{r}
+model_multinom <- multinom(klasa ~ x1 + x2 + x3 + x4, data = dane2)
+summary(model_multinom)
+```
+Z modelu otrzymaliśmy wagi, wartości współczynników regresji, błędy standardowe mniejsze wartości błędów standardowych oznaczają bardziej precyzyjne oszacowanie), wartości Residual Deviance oraz miary AIC.
+
+Residual Deviance: 128.2863 mówi o tym, jak dobrze model dopasowuje się do danych. Im mniejsza wartość deviance, tym lepsze dopasowanie modelu.
+
+AIC (Akaike Information Criterion): 148.2863 to miara, która bierze pod uwagę zarówno jakość dopasowania modelu (deviance), jak i liczbę parametrów w modelu. Niższe AIC wskazuje na lepszy model (mniejszy AIC oznacza lepszy model w sensie równowagi między dopasowaniem a złożonością).
+
+Predykcje na zbiorze uczącym:
+```{r}
+pred_multinom <- predict(model_multinom)
+dane2$pred_multinom <- pred_multinom
+```
+
+Macierz pomyłek:
+```{r}
+T_multinom <- table(dane2$klasa, dane2$pred_multinom)
+T_multinom
+```
+
+Precyzja/dokładność:
+```{r}
+acc_multinom <- sum(diag(T_multinom)/sum(T_multinom))
+acc_multinom
+```
+
+Błąd:
+```{r}
+err_multinom <- 1-acc_multinom
+err_multinom
+```
+
+Wykres:
+```{r}
+ggplot(dane2, aes(x = x1, y = x2)) +
+  geom_point(aes(color = as.factor(pred_multinom), shape = as.factor(klasa)), alpha = 0.7) +
+  labs(color = "Predykcja", shape = "Klasa") +
+  ggtitle("Wieloklasowa klasyfikacja - regresja logistyczna") +
+  xlab("x1") + ylab("x2") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Obliczanie zmiennych kanonicznych
+
+Zanim przejdziemy do regresji logistycznej na zmiennych kanonicznych, musimy obliczyć te zmienne. 
+
+Liniowa analiza dyskryminacyjna (ang. Linear Discriminant Analysis, LDA) to statystyczna metoda stosowana w problemach klasyfikacyjnych, szczególnie w sytuacjach, gdy liczba klas $k$ jest większa niż 2. LDA łączy elementy redukcji wymiarów i klasyfikacji, dążąc do znalezienia liniowych kombinacji zmiennych objaśniających, które najlepiej rozróżniają między klasami.
+
+**Założenia LDA**:
+
+- zmienne objaśniające mają rozkład normalny w każdej klasie,
+- macierz kowariancji zmiennych objaśniających jest taka sama we wszystkich klasach,
+- granice decyzyjne między klasami są liniowe.
+
+Celem LDA jest zminimalizowanie wariancji wewnątrzklasowej i jednoczesne zmaksymalizowanie wariancji międzyklasowej. W praktyce oznacza to poszukiwanie takich kierunków liniowych (zmiennych kanonicznych), które najlepiej separują klasy.
+
+**Równanie klasyfikacji w LDA**
+
+Dla obserwacji $x$, prawdopodobieństwo przynależności do klasy $k$ wynika z funkcji liniowej:
+$$\delta_k(x)=x^T w_k+b_k,$$
+gdzie: 
+
+- $w_k$ to wektor wag (parametrów) dla klasy $k$,
+- $b_k$ to wyraz wolny.
+
+Obserwacja jest przypisywana do klasy z najwyższą wartością funkcji $\delta_k(x)$.
+
+LDA umożliwia również redukcję wymiarów poprzez rzutowanie danych na kierunki kanoniczne, wyznaczane jako liniowe kombinacje zmiennych objaśniających. Liczba kierunków kanonicznych jest ograniczona do $\min(K-1,p)$, gdzie $K$ to liczba klas, a $p$ to liczba zmiennych objaśniających.
+
+Użyjemy funkcji `lda` do analizy dyskryminacyjnej i wyznaczenia zmiennych kanonicznych:
+```{r}
+LDA_model <- lda(klasa ~ x1 + x2 + x3 + x4, data = dane2)
+LDA_model
+```
+W wyniku analizy LDA uzyskaliśmy różne informacje dotyczące modelu. Prawdopodobieństwa aprioryczne klas są obliczane na podstawie ich liczebności, więc mamy równe prawdopodobieństwa dla wszystkich trzech klas, tj. 33,33% dla każdej. Group means pokazuje średnie wartości zmiennych $x_1,x_2,x_3,x_4$ w każdej z klas. Współczynniki funkcji dyskryminacyjnych to wektory własne wyznaczające kierunki określające współrzędne kanoniczne. Proporcje wariancji wyjaśnione przez poszczególne funkcje dyskryminacyjne wskazują na to, że LD1 wyjaśnia 94,99% wariancji między klasami, a LD2 wyjaśnia 5,01% wariancji.
+
+Wywołujemy wektory własne wyznaczające kierunki określające współrzędne kanoniczne:
+```{r}
+LDA_model$scaling
+
+LD1 <- LDA_model$scaling[,1]
+LD2 <- LDA_model$scaling[,2]
+```
+Mamy 2 zmienne kanoniczne, ponieważ $\min(K-1,p)=\min(3-1,4)=2$.
+
+Dokonujemy reklasyfikacji danych z proby uczącej korzystając ze współrzędnych kanonicznych uzyskanych przez wbudowaną metodę `lda`. Predykcja na podstawie zmiennych kanonicznych:
+```{r}
+dane2$pred_lda <- predict(LDA_model)$class
+```
+
+Macierz pomyłek:
+```{r}
+T_lda <- table(dane2$klasa, dane2$pred_lda)
+T_lda
+```
+
+Precyzja/dokładność:
+```{r}
+acc_lda <- sum(diag(T_lda)) / sum(T_lda)
+acc_lda
+```
+
+Błąd:
+```{r}
+err_lda <- 1 - acc_lda
+err_lda
+```
+
+Uzupełniamy ramkę danych o rzuty na kierunki wyznaczające współrzędne kanoniczne z wbudowanej metody `lda`:
+```{r}
+dane2$LD1 <- as.matrix(dane2[,1:4]) %*% LD1
+dane2$LD2 <- as.matrix(dane2[,1:4]) %*% LD2
+```
+
+Na wykresie przedstawimy graficzną reprezentację klasyfikacji wykorzystującą współrzędne kanoniczne z metody `lda`:
+```{r}
+ggplot(dane2, aes(x = LD1, y = LD2)) +
+  geom_point(aes(color = as.factor(pred_lda), shape = as.factor(klasa)), alpha = 0.7) +
+  labs(color = "Predykcja", shape = "Klasa") +
+  ggtitle("Regresja logistyczna na zmiennych kanonicznych") +
+  xlab("LD1") + ylab("LD2") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Związek pomiędzy regresją logistyczną i liniową analizą dyskryminacyjną
+
+Jeśli założymy, że w każdej grupie obserwowany wektor losowy $X$ ma $p$-wymiarowy rozkład normalny z tą samą macierzą kowariancji $\Sigma$, to oba modele prowadzą do tego samego klasyfikatora liniowego względem $(x_1,x_2,\cdots,x_p)^T$. Różnica polega na sposobie estymacji parametrów. W LDA estymujemy cały rozkład łączny maksymalizując funkcję wiarygodności. Natomiast w regresji logistycznej maksymalizujemy warunkową funkcję wiarygodności.
